@@ -48,10 +48,12 @@
 	 
 	 */
 	
-	NSURL *tilesURL = [NSURL fileURLWithPath:[[NSBundle mainBundle]
-											  pathForResource:databaseFilename 
-											  ofType:@"mbtiles"]];
+//	NSURL *tilesURL = [NSURL fileURLWithPath:[[NSBundle mainBundle]
+//											  pathForResource:databaseFilename 
+//											  ofType:@"mbtiles"]];
 
+	NSURL *tilesURL = [NSURL fileURLWithPath:databaseFilename];
+	
 	FMDatabase *db = [[FMDatabase databaseWithPath:[tilesURL relativePath]] retain];
     
     if (![db open]) return;
@@ -199,8 +201,7 @@
 		} else {
 			return nil;
 		}
-	}
-	
+	}	
 }
 
 -(RMTileImage *)getTileImageFrom:(FMDatabase *)db atZoom:(int)zoom atCol:(int)col atRow:(int)row aTile:(RMTile)tile {
@@ -221,110 +222,119 @@
     NSInteger x    = tile.x;
     NSInteger y    = pow(2, zoom) - tile.y - 1;
 
+	RMTileImage *image = nil;
+	
 	
 	// Get all of the various databases that can match this
 	NSMutableArray *matchingDBArray = [[NSMutableArray alloc] init];
-	int c = [databaseNames count];
-	for (int i=0; i < c; i++) {
-		NSString *dbName = [databaseNames objectAtIndex:i];
-		NSDictionary *d = [dbDictionary objectForKey:dbName];
-		NSDictionary *zoomD = [d objectForKey:[NSNumber numberWithInt:zoom]];
-		if (zoomD) {
-			NSNumber *minColn = [zoomD objectForKey:@"minCol"];
-			NSNumber *maxColn = [zoomD objectForKey:@"maxCol"];
-			NSNumber *minRown = [zoomD objectForKey:@"minRow"];
-			NSNumber *maxRown = [zoomD objectForKey:@"maxRow"];
+	@try {
+		int c = [databaseNames count];
+		for (int i=0; i < c; i++) {
+			NSString *dbName = [databaseNames objectAtIndex:i];
+			NSDictionary *d = [dbDictionary objectForKey:dbName];
+			NSDictionary *zoomD = [d objectForKey:[NSNumber numberWithInt:zoom]];
+			if (zoomD) {
+				NSNumber *minColn = [zoomD objectForKey:@"minCol"];
+				NSNumber *maxColn = [zoomD objectForKey:@"maxCol"];
+				NSNumber *minRown = [zoomD objectForKey:@"minRow"];
+				NSNumber *maxRown = [zoomD objectForKey:@"maxRow"];
+				
+				int minCol = [minColn intValue];
+				int maxCol = [maxColn intValue];
+				int minRow = [minRown intValue];
+				int maxRow = [maxRown intValue];
+				
+				if ([[d objectForKey:@"reverse-tiles"] isEqualToString:@"T"]) {
+					y = tile.y;
+				} else {
+					y = pow(2, zoom) - tile.y - 1;
+				}
+							
+				if ((x >= minCol) && (x <= maxCol) && (y >= minRow) && (y <= maxRow)) {
+					// NSLog(@"Found match: %@ for z: %i  x: %i  y: %i", dbName, zoom, x, y);
+					// Check to see if it's a base layer and if so, insert at the beginning
+					if ([[d objectForKey:@"base-layer"] isEqualToString:@"T"]) {
+						// NSLog(@"Current layer is baselayer... inserting instead of adding");
+						[matchingDBArray insertObject:d atIndex:0];
+					} else {
+						[matchingDBArray addObject:d];
+					}
+				}
+			}
+		}
 			
-			int minCol = [minColn intValue];
-			int maxCol = [maxColn intValue];
-			int minRow = [minRown intValue];
-			int maxRow = [maxRown intValue];
-			
-			if ([[d objectForKey:@"reverse-tiles"] isEqualToString:@"T"]) {
+		// Get all of the images
+		if ([matchingDBArray count] == 0) {
+			image = [RMTileImage dummyTile:tile];
+		} else if ([matchingDBArray count] == 1) {
+			// Optimized for the single use case
+			NSDictionary *singleImageDict = [matchingDBArray objectAtIndex:0];
+			FMDatabase *singleImageDB = [singleImageDict objectForKey:@"database"];
+			if ([[singleImageDict objectForKey:@"reverse-tiles"] isEqualToString:@"T"]) {
 				y = tile.y;
 			} else {
 				y = pow(2, zoom) - tile.y - 1;
 			}
-						
-			if ((x >= minCol) && (x <= maxCol) && (y >= minRow) && (y <= maxRow)) {
-				NSLog(@"Found match: %@ for z: %i  x: %i  y: %i", dbName, zoom, x, y);
-				// Check to see if it's a base layer and if so, insert at the beginning
-				if ([[d objectForKey:@"base-layer"] isEqualToString:@"T"]) {
-					NSLog(@"Current layer is baselayer... inserting instead of adding");
-					[matchingDBArray insertObject:d atIndex:0];
-				} else {
-					[matchingDBArray addObject:d];
-				}
-			}
-		}
-	}
-		
-	// Get all of the images
-	RMTileImage *image = nil;
-	
-	if ([matchingDBArray count] == 0) {
-        image = [RMTileImage dummyTile:tile];
-	} else if ([matchingDBArray count] == 1) {
-		// Optimized for the single use case
-		NSDictionary *singleImageDict = [matchingDBArray objectAtIndex:0];
-		FMDatabase *singleImageDB = [singleImageDict objectForKey:@"database"];
-		if ([[singleImageDict objectForKey:@"reverse-tiles"] isEqualToString:@"T"]) {
-			y = tile.y;
+			image = [self getTileImageFrom:singleImageDB atZoom:zoom atCol:x atRow:y aTile:tile];
 		} else {
-			y = pow(2, zoom) - tile.y - 1;
-		}
-		image = [self getTileImageFrom:singleImageDB atZoom:zoom atCol:x atRow:y aTile:tile];
-	} else {
-		// Iterates the list and creates a combined tile
-		// NSMutableArray *tileImageArray = [[NSMutableArray alloc] init];
-		
-		// Create te 
-		CGRect area = CGRectMake(0,0,256,256);
-		UIGraphicsBeginImageContext(area.size);
-		CGContextRef context = UIGraphicsGetCurrentContext();
-		CGContextRetain(context);
-		
-		// mirroring context
-		CGContextTranslateCTM(context, 0.0, area.size.height);
-		CGContextScaleCTM(context, 1.0, -1.0);
-		
-		for (int j=0; j < [matchingDBArray count]; j++) {
-			NSDictionary *d = [matchingDBArray objectAtIndex:j];
-			FMDatabase *db = [d objectForKey:@"database"];
+			// Iterates the list and creates a combined tile
+			// NSMutableArray *tileImageArray = [[NSMutableArray alloc] init];
+			
+			// Create te 
+			CGRect area = CGRectMake(0,0,256,256);
+			UIGraphicsBeginImageContext(area.size);
+			CGContextRef context = UIGraphicsGetCurrentContext();
+			CGContextRetain(context);
+			
+			// mirroring context
+			CGContextTranslateCTM(context, 0.0, area.size.height);
+			CGContextScaleCTM(context, 1.0, -1.0);
+			
+			for (int j=0; j < [matchingDBArray count]; j++) {
+				NSDictionary *d = [matchingDBArray objectAtIndex:j];
+				FMDatabase *db = [d objectForKey:@"database"];
 
-			if ([[d objectForKey:@"reverse-tiles"] isEqualToString:@"T"]) {
-				y = tile.y;
-			} else {
-				y = pow(2, zoom) - tile.y - 1;
-			}
-			
-			NSData *imageData = [self getTileDataFrom:db atZoom:zoom atCol:x atRow:y];
-			UIImage *tempImage = [[UIImage alloc] initWithData:imageData];
-			
-			CGContextBeginTransparencyLayer(context, nil);
-			
-			if (hasBaseLayer) {
-				if ([[d objectForKey:@"base-layer"] isEqualToString:@"T"]) {
-					CGContextSetAlpha( context, 1.0 );
+				if ([[d objectForKey:@"reverse-tiles"] isEqualToString:@"T"]) {
+					y = tile.y;
+				} else {
+					y = pow(2, zoom) - tile.y - 1;
+				}
+				
+				NSData *imageData = [self getTileDataFrom:db atZoom:zoom atCol:x atRow:y];
+				UIImage *tempImage = [[UIImage alloc] initWithData:imageData];
+				// [imageData release];
+				
+				CGContextBeginTransparencyLayer(context, nil);
+				
+				if (hasBaseLayer) {
+					if ([[d objectForKey:@"base-layer"] isEqualToString:@"T"]) {
+						CGContextSetAlpha( context, 1.0 );
+					} else {
+						CGContextSetAlpha( context, 1.0 );
+					}
 				} else {
 					CGContextSetAlpha( context, 1.0 );
 				}
-			} else {
-				CGContextSetAlpha( context, 1.0 );
+						
+				CGContextDrawImage(context, area, tempImage.CGImage);
+				[tempImage release];
+				CGContextEndTransparencyLayer(context);
 			}
-					
-			CGContextDrawImage(context, area, tempImage.CGImage);
-			CGContextEndTransparencyLayer(context);
+			
+			// get created image
+			UIImage *finalImage = UIGraphicsGetImageFromCurrentImageContext();
+			CGContextRelease(context);
+			UIGraphicsEndImageContext();
+			NSData *finalData = UIImagePNGRepresentation(finalImage);
+			
+			image = [RMTileImage imageForTile:tile withData:finalData];
 		}
-		
-		// get created image
-		UIImage *finalImage = UIGraphicsGetImageFromCurrentImageContext();
-		CGContextRelease(context);
-		UIGraphicsEndImageContext();
-		NSData *finalData = UIImagePNGRepresentation(finalImage);
-		
-		image = [RMTileImage imageForTile:tile withData:finalData];
-		
+//		@catch (NSException * e) {
+//			<#handler#>
+//		}
+	}
+	@finally {
+			[matchingDBArray release];
 	}
 	
 	return image;
